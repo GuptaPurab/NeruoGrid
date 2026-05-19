@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>NeuroGrid — Intelligent Power Grid</title>
+<style>
+  :root {
+    --bg:       #0c1018;
+    --panel:    rgba(14,18,28,0.92);
+    --border:   rgba(255,255,255,0.07);
+    --text:     #c8cdd5;
+    --text-dim: rgba(160,168,180,0.55);
+    --col-normal:   #4ab87a;
+    --col-warning:  #f5c842;
+    --col-critical: #e8374a;
+    --col-voltage:  #9b5de5;
+    --col-rerouted: #3ebdb8;
+    --col-dead:     #555a60;
+    --font-ui:   system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+    --font-mono: 'SF Mono', 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+  }
+
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--text); font-family:var(--font-ui); overflow:hidden; height:100vh; width:100vw; cursor:grab; }
+  body.dragging { cursor:grabbing; }
+  #canvas-container { position:fixed; inset:0; z-index:0; }
+
+  #topbar {
+    position:fixed; top:0; left:0; right:0; height:54px;
+    background:var(--panel); border-bottom:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 24px; z-index:100; backdrop-filter:blur(14px);
+  }
+  .logo { font-family:var(--font-ui); font-weight:900; font-size:22px; letter-spacing:-0.5px; color:var(--text); }
+  .logo span { color:#4a9fd8; }
+  .logo sup { font-size:10px; color:#e8374a; letter-spacing:1px; font-weight:700; vertical-align:super; }
+  #system-time { font-family:var(--font-mono); font-size:10px; color:var(--text-dim); }
+  #grid-status-badge {
+    font-family:var(--font-mono); font-size:10px; letter-spacing:2px;
+    padding:5px 14px; border-radius:20px; font-weight:700;
+    border:2px solid var(--col-normal); color:var(--col-normal);
+    background:rgba(74,184,122,0.08); transition:all 0.3s;
+  }
+
+  #prediction-banner {
+    position:fixed; top:64px; left:50%; transform:translateX(-50%);
+    z-index:110; display:none; align-items:center; gap:10px;
+    background:rgba(245,200,66,0.08); border:2px solid rgba(245,200,66,0.5);
+    border-radius:24px; padding:7px 22px;
+    font-family:var(--font-mono); font-size:10px; letter-spacing:2px; color:#fcd34d;
+    backdrop-filter:blur(8px); animation:bannerPulse 0.9s infinite alternate;
+  }
+  @keyframes bannerPulse { from{box-shadow:0 2px 12px rgba(245,200,66,0.1);} to{box-shadow:0 2px 28px rgba(245,200,66,0.35);} }
+  .blink { animation:blink 0.7s infinite; }
+  @keyframes blink { 50%{opacity:0;} }
+
+  #left-panel { position:fixed; top:64px; left:14px; width:230px; z-index:100; display:flex; flex-direction:column; gap:10px; }
+  .panel-card {
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:14px 16px; backdrop-filter:blur(14px); box-shadow:0 2px 16px rgba(0,0,0,0.3);
+  }
+  .panel-title { font-family:var(--font-mono); font-size:9px; letter-spacing:3px; color:var(--text-dim); margin-bottom:12px; text-transform:uppercase; font-weight:700; }
+  .node-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:7px; font-size:11px; font-weight:600; }
+  .node-dot { width:9px; height:9px; border-radius:50%; margin-right:8px; flex-shrink:0; transition:all 0.4s; }
+  .node-name { flex:1; color:var(--text); }
+  .node-load { font-family:var(--font-mono); font-size:10px; color:var(--text-dim); }
+  .metric-row { margin-bottom:10px; }
+  .metric-label { display:flex; justify-content:space-between; font-size:10px; font-weight:700; color:var(--text-dim); margin-bottom:4px; }
+  .metric-bar-bg { height:5px; background:rgba(255,255,255,0.08); border-radius:3px; overflow:hidden; }
+  .metric-bar-fill { height:100%; border-radius:3px; transition:width 0.5s, background 0.4s; }
+
+  #right-panel { position:fixed; top:64px; right:14px; width:290px; z-index:100; }
+  #ai-log {
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:14px 16px; backdrop-filter:blur(14px); max-height:400px;
+    overflow:hidden; display:flex; flex-direction:column; box-shadow:0 2px 16px rgba(0,0,0,0.3);
+  }
+  #log-entries { display:flex; flex-direction:column; gap:5px; overflow:hidden; }
+  .log-entry {
+    font-family:var(--font-mono); font-size:10px; line-height:1.5;
+    padding:5px 8px; border-radius:6px; border-left:3px solid;
+    opacity:0; transform:translateX(8px); transition:opacity 0.3s, transform 0.3s; flex-shrink:0;
+  }
+  .log-entry.visible { opacity:1; transform:translateX(0); }
+  .log-entry.info    { border-color:#4ab87a; background:rgba(74,184,122,0.1);  color:#7ee8aa; }
+  .log-entry.warn    { border-color:#f5c842; background:rgba(245,200,66,0.08); color:#fcd34d; }
+  .log-entry.crit    { border-color:#e8374a; background:rgba(232,55,74,0.1);   color:#f87171; }
+  .log-entry.heal    { border-color:#3ebdb8; background:rgba(62,189,184,0.1);  color:#5eead4; }
+  .log-entry.voltage { border-color:#9b5de5; background:rgba(155,93,229,0.1);  color:#c4b5fd; }
+
+  #bottom-bar {
+    position:fixed; bottom:0; left:0; right:0; height:46px;
+    background:var(--panel); border-top:1px solid var(--border);
+    display:flex; align-items:center; justify-content:space-between;
+    padding:0 24px; z-index:100; backdrop-filter:blur(14px);
+  }
+  .stat-pill { display:flex; align-items:center; gap:7px; font-size:10px; font-weight:700; color:var(--text-dim); }
+  .stat-dot { width:7px; height:7px; border-radius:50%; flex-shrink:0; }
+  .stat-value { color:var(--text); font-family:var(--font-mono); }
+
+  #controls { position:fixed; bottom:56px; left:50%; transform:translateX(-50%); display:flex; gap:8px; z-index:100; }
+  .ctrl-btn {
+    font-family:var(--font-mono); font-size:9px; letter-spacing:1.5px;
+    padding:8px 16px; border-radius:20px; cursor:pointer; transition:all 0.2s;
+    text-transform:uppercase; font-weight:700; border:2px solid rgba(255,255,255,0.1);
+    background:rgba(255,255,255,0.04); color:var(--text); box-shadow:0 2px 10px rgba(0,0,0,0.25);
+  }
+  .ctrl-btn:hover { background:rgba(255,255,255,0.1); box-shadow:0 4px 18px rgba(0,0,0,0.35); transform:translateY(-1px); }
+  .ctrl-btn.danger { border-color:rgba(232,55,74,0.3); color:#f87171; background:rgba(232,55,74,0.08); }
+  .ctrl-btn.danger:hover { background:rgba(232,55,74,0.16); border-color:rgba(232,55,74,0.5); }
+
+  #alert-flash { position:fixed; inset:0; pointer-events:none; z-index:150; opacity:0; transition:opacity 0.15s; }
+
+  #legend {
+    position:fixed; bottom:56px; right:14px; z-index:100;
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:10px; padding:10px 14px; box-shadow:0 2px 14px rgba(0,0,0,0.3);
+  }
+  .legend-row { display:flex; align-items:center; gap:7px; font-size:9px; font-weight:700; color:var(--text-dim); margin-bottom:5px; }
+  .legend-row:last-child { margin-bottom:0; }
+  .legend-swatch { width:26px; height:6px; border-radius:3px; flex-shrink:0; }
+</style>
+</head>
+<body>
+
+<div id="alert-flash"></div>
+<div id="canvas-container"></div>
+
+<div id="topbar">
+  <div class="logo">Neuro<span>Grid</span><sup>AI</sup></div>
+  <div id="prediction-banner"><span class="blink">!</span>&nbsp;<span id="prediction-text">PREDICTED OVERLOAD IN 5s</span></div>
+  <div id="system-time">--:--:--</div>
+  <div id="grid-status-badge">NOMINAL</div>
+</div>
+
+<div id="left-panel">
+  <div class="panel-card">
+    <div class="panel-title">Node Health</div>
+    <div id="node-health-list"></div>
+  </div>
+  <div class="panel-card">
+    <div class="panel-title">Grid Metrics</div>
+    <div class="metric-row">
+      <div class="metric-label"><span>GRID LOAD</span><span id="m-load">0%</span></div>
+      <div class="metric-bar-bg"><div class="metric-bar-fill" id="bar-load" style="width:0%"></div></div>
+    </div>
+    <div class="metric-row">
+      <div class="metric-label"><span>VOLTAGE</span><span id="m-volt">0%</span></div>
+      <div class="metric-bar-bg"><div class="metric-bar-fill" id="bar-volt" style="width:0%"></div></div>
+    </div>
+    <div class="metric-row">
+      <div class="metric-label"><span>STABILITY</span><span id="m-stab">0%</span></div>
+      <div class="metric-bar-bg"><div class="metric-bar-fill" id="bar-stab" style="width:0%"></div></div>
+    </div>
+    <div class="metric-row">
+      <div class="metric-label"><span>EFFICIENCY</span><span id="m-eff">0%</span></div>
+      <div class="metric-bar-bg"><div class="metric-bar-fill" id="bar-eff" style="width:0%"></div></div>
+    </div>
+  </div>
+</div>
+
+<div id="right-panel">
+  <div id="ai-log">
+    <div class="panel-title">AI Decision Log</div>
+    <div id="log-entries"></div>
+  </div>
+</div>
+
+<div id="controls">
+  <button class="ctrl-btn danger" onclick="triggerOverload()">Trigger Overload</button>
+  <button class="ctrl-btn danger" onclick="triggerLineFailure()">Line Failure</button>
+  <button class="ctrl-btn danger" onclick="triggerVoltageDrop()">Voltage Drop</button>
+  <button class="ctrl-btn" onclick="healGrid()">Heal Grid</button>
+  <button class="ctrl-btn" onclick="resetSim()">Reset</button>
+</div>
+
+<div id="legend">
+  <div class="legend-row"><div class="legend-swatch" style="background:#4ab87a"></div>NORMAL</div>
+  <div class="legend-row"><div class="legend-swatch" style="background:#f5c842"></div>WARNING</div>
+  <div class="legend-row"><div class="legend-swatch" style="background:#e8374a"></div>CRITICAL</div>
+  <div class="legend-row"><div class="legend-swatch" style="background:#9b5de5"></div>VOLTAGE DROP</div>
+  <div class="legend-row"><div class="legend-swatch" style="background:#3ebdb8"></div>REROUTED</div>
+  <div class="legend-row"><div class="legend-swatch" style="background:#555a60"></div>INACTIVE</div>
+</div>
+
+<div id="bottom-bar">
+  <div class="stat-pill"><div class="stat-dot" style="background:#4ab87a"></div>NODES <span class="stat-value" id="stat-nodes">9/9</span></div>
+  <div class="stat-pill"><div class="stat-dot" style="background:#3ebdb8"></div>LINES <span class="stat-value" id="stat-lines">10/10</span></div>
+  <div class="stat-pill"><div class="stat-dot" style="background:#f5c842"></div>PREDICTED <span class="stat-value" id="stat-pred">0</span></div>
+  <div class="stat-pill"><div class="stat-dot" style="background:#3ebdb8"></div>AUTO-HEALS <span class="stat-value" id="stat-heals">0</span></div>
+  <div class="stat-pill"><div class="stat-dot" style="background:#9b5de5"></div>UPTIME <span class="stat-value" id="stat-uptime">100%</span></div>
+</div>
+
+<script src="./three.min.js"></script>
+<script>
+const container = document.getElementById('canvas-container');
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x0c1018, 1);
+renderer.shadowMap.enabled = true;
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x0c1018, 0.008);
+
+const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 500);
+
+// Slanted camera — ~50 degree elevation
+let panX=0, panZ=0, zoomDist=32;
+const CAM_ELEV = 50 * Math.PI / 180;
+
+function applyCamera() {
+  const cy = zoomDist * Math.sin(CAM_ELEV);
+  const cz = zoomDist * Math.cos(CAM_ELEV);
+  camera.position.set(panX, cy, panZ + cz);
+  camera.lookAt(panX, 0, panZ);
+}
+applyCamera();
+
+// Mouse drag & scroll zoom
+let isDrag=false, lmx=0, lmy=0;
+renderer.domElement.addEventListener('mousedown', e=>{ isDrag=true; lmx=e.clientX; lmy=e.clientY; document.body.classList.add('dragging'); });
+window.addEventListener('mouseup', ()=>{ isDrag=false; document.body.classList.remove('dragging'); });
+window.addEventListener('mousemove', e=>{
+  if (!isDrag) return;
+  const spd = zoomDist*0.0018;
+  panX -= (e.clientX-lmx)*spd;
+  panZ -= (e.clientY-lmy)*spd;
+  lmx=e.clientX; lmy=e.clientY;
+});
+window.addEventListener('wheel', e=>{ zoomDist=Math.max(14,Math.min(60,zoomDist+e.deltaY*0.035)); },{passive:true});
+
+// Touch drag
+let touch0=null;
+renderer.domElement.addEventListener('touchstart', e=>{ if(e.touches.length===1){touch0={x:e.touches[0].clientX,y:e.touches[0].clientY};} },{passive:true});
+renderer.domElement.addEventListener('touchmove', e=>{
+  if(e.touches.length===1&&touch0){
+    const spd=zoomDist*0.0018;
+    panX-=(e.touches[0].clientX-touch0.x)*spd;
+    panZ-=(e.touches[0].clientY-touch0.y)*spd;
+    touch0={x:e.touches[0].clientX,y:e.touches[0].clientY};
+  }
+},{passive:true});
+
+// Lighting — tuned for dark theme
+scene.add(new THREE.AmbientLight(0x364060, 1.0));
+const sun=new THREE.DirectionalLight(0xfff0d0,1.6); sun.position.set(8,20,12); sun.castShadow=true; scene.add(sun);
+const fill=new THREE.DirectionalLight(0x5070a0,0.5); fill.position.set(-10,14,-8); scene.add(fill);
+// Station glow light
+const stationGlow = new THREE.PointLight(0x4ab87a, 2.0, 18);
+stationGlow.position.set(0, 4, 0);
+scene.add(stationGlow);
+
+// Grid topology
+const NODE_DEFS = [
+  {id:0, name:'Power Hub',   type:'station',  pos:[  0, 0,  0]},
+  {id:1, name:'Factory A',   type:'factory',  pos:[ -7, 0, -6]},
+  {id:2, name:'Factory B',   type:'factory',  pos:[  7, 0, -6]},
+  {id:3, name:'House NW',    type:'house',    pos:[-11, 0,  1]},
+  {id:4, name:'House NE',    type:'house',    pos:[ 11, 0,  1]},
+  {id:5, name:'House West',  type:'house',    pos:[ -9, 0,  7]},
+  {id:6, name:'House East',  type:'house',    pos:[  9, 0,  7]},
+  {id:7, name:'House SW',    type:'house',    pos:[ -3, 0, 11]},
+  {id:8, name:'House SE',    type:'house',    pos:[  3, 0, 11]},
+];
+
+const PRIMARY = [
+  {from:0,to:1,col:0x3a8fc7},
+  {from:0,to:2,col:0xe8374a},
+  {from:1,to:3,col:0x3a8fc7},
+  {from:2,to:4,col:0xe8374a},
+  {from:1,to:5,col:0x4ab87a},
+  {from:2,to:6,col:0xf5c842},
+  {from:0,to:7,col:0x9b5de5},
+  {from:0,to:8,col:0x9b5de5},
+  {from:3,to:5,col:0x4ab87a},
+  {from:4,to:6,col:0xf5c842},
+];
+
+const ALTERNATE = [
+  {from:0,to:3,col:0x3a8fc7},
+  {from:0,to:4,col:0xe8374a},
+  {from:1,to:7,col:0x4ab87a},
+  {from:2,to:8,col:0xf5c842},
+];
+
+// Node state
+let nodes = NODE_DEFS.map(d=>({
+  ...d, load:28+Math.random()*32, voltage:88+Math.random()*12,
+  status:'normal', mesh:null, disc:null, loadDir:Math.random()>0.5?1:-1,
+}));
+
+let edges = [
+  ...PRIMARY.map(e=>({...e, status:'normal', isAlt:false, tube:null, particles:[]})),
+  ...ALTERNATE.map(e=>({...e, status:'dead',  isAlt:true,  tube:null, particles:[]})),
+];
+
+// Building constructors
+function buildStation() {
+  const g=new THREE.Group();
+  const base=new THREE.Mesh(
+    new THREE.CylinderGeometry(1.6,1.8,0.22,6),
+    new THREE.MeshPhongMaterial({color:0x8a8478,flatShading:true})
+  ); base.position.y=0.11; g.add(base);
+  const tower=new THREE.Mesh(
+    new THREE.CylinderGeometry(0.65,0.85,2.4,8),
+    new THREE.MeshPhongMaterial({color:0x706860,flatShading:true})
+  ); tower.position.y=1.4; g.add(tower);
+  const ring=new THREE.Mesh(
+    new THREE.TorusGeometry(0.88,0.14,8,28),
+    new THREE.MeshPhongMaterial({color:0x4ab87a,emissive:new THREE.Color(0x4ab87a),emissiveIntensity:1.2})
+  ); ring.rotation.x=Math.PI/2; ring.position.y=1.5; ring.userData.isStatus=true; g.add(ring);
+  const top=new THREE.Mesh(
+    new THREE.ConeGeometry(0.65,0.6,8),
+    new THREE.MeshPhongMaterial({color:0x605850,flatShading:true})
+  ); top.position.y=2.9; g.add(top);
+  const orb=new THREE.Mesh(
+    new THREE.SphereGeometry(0.22,10,10),
+    new THREE.MeshPhongMaterial({color:0x4ab87a,emissive:new THREE.Color(0x4ab87a),emissiveIntensity:1.5})
+  ); orb.position.y=3.45; orb.userData.isStatus=true; g.add(orb);
+  for(let i=0;i<4;i++){
+    const a=(i/4)*Math.PI*2, px=Math.cos(a)*1.15, pz=Math.sin(a)*1.15;
+    const leg=new THREE.Mesh(
+      new THREE.CylinderGeometry(0.07,0.1,1.3,6),
+      new THREE.MeshPhongMaterial({color:0x585048})
+    ); leg.position.set(px,0.65,pz); g.add(leg);
+  }
+  return g;
+}
+
+function buildFactory() {
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(
+    new THREE.BoxGeometry(2.2,1.4,1.6),
+    new THREE.MeshPhongMaterial({color:0x706858,flatShading:true})
+  ); body.position.y=0.7; g.add(body);
+  const roof=new THREE.Mesh(
+    new THREE.BoxGeometry(2.3,0.14,1.7),
+    new THREE.MeshPhongMaterial({color:0x585048})
+  ); roof.position.y=1.47; g.add(roof);
+  const annex=new THREE.Mesh(
+    new THREE.BoxGeometry(0.9,0.9,1.4),
+    new THREE.MeshPhongMaterial({color:0x686050,flatShading:true})
+  ); annex.position.set(1.55,0.45,0); g.add(annex);
+  for(let i=0;i<2;i++){
+    const cx=-0.5+i*1.0;
+    const chim=new THREE.Mesh(
+      new THREE.CylinderGeometry(0.15,0.19,1.5,8),
+      new THREE.MeshPhongMaterial({color:0x484038})
+    ); chim.position.set(cx,2.17,0); g.add(chim);
+    const cap=new THREE.Mesh(
+      new THREE.CylinderGeometry(0.19,0.15,0.16,8),
+      new THREE.MeshPhongMaterial({color:0x4ab87a,emissive:new THREE.Color(0x4ab87a),emissiveIntensity:1.0})
+    ); cap.position.set(cx,2.98,0); cap.userData.isStatus=true; g.add(cap);
+  }
+  const win=new THREE.Mesh(
+    new THREE.BoxGeometry(0.32,0.32,0.07),
+    new THREE.MeshPhongMaterial({color:0x4ab87a,emissive:new THREE.Color(0x4ab87a),emissiveIntensity:0.8})
+  ); win.position.set(0,0.8,0.835); win.userData.isStatus=true; g.add(win);
+  return g;
+}
+
+function buildHouse() {
+  const g=new THREE.Group();
+  const body=new THREE.Mesh(
+    new THREE.BoxGeometry(1.2,1.0,1.1),
+    new THREE.MeshPhongMaterial({color:0x787068,flatShading:true})
+  ); body.position.y=0.5; g.add(body);
+  const roof=new THREE.Mesh(
+    new THREE.ConeGeometry(0.95,0.7,4),
+    new THREE.MeshPhongMaterial({color:0x504840,flatShading:true})
+  ); roof.rotation.y=Math.PI/4; roof.position.y=1.35; g.add(roof);
+  const chim=new THREE.Mesh(
+    new THREE.BoxGeometry(0.2,0.4,0.2),
+    new THREE.MeshPhongMaterial({color:0x585048})
+  ); chim.position.set(0.3,1.7,0.1); g.add(chim);
+  const door=new THREE.Mesh(
+    new THREE.BoxGeometry(0.24,0.4,0.06),
+    new THREE.MeshPhongMaterial({color:0x403830})
+  ); door.position.set(0,0.2,0.58); g.add(door);
+  const win=new THREE.Mesh(
+    new THREE.BoxGeometry(0.28,0.26,0.07),
+    new THREE.MeshPhongMaterial({color:0x4ab87a,emissive:new THREE.Color(0x4ab87a),emissiveIntensity:0.9})
+  ); win.position.set(0.35,0.62,0.58); win.userData.isStatus=true; g.add(win);
+  return g;
+}
+
+function makeDisc(col) {
+  const m=new THREE.Mesh(
+    new THREE.CircleGeometry(1.2,32),
+    new THREE.MeshBasicMaterial({color:col,transparent:true,opacity:0.18,side:THREE.DoubleSide})
+  ); m.rotation.x=-Math.PI/2; m.position.y=0.01; return m;
+}
+
+// Build tube edge
+function buildTube(e) {
+  if(e.tube){scene.remove(e.tube); e.tube=null;}
+  const f=new THREE.Vector3(...nodes[e.from].pos).setY(0.15);
+  const t=new THREE.Vector3(...nodes[e.to].pos).setY(0.15);
+  const mid=f.clone().lerp(t,0.5); mid.y=0.18;
+  const curve=new THREE.QuadraticBezierCurve3(f,mid,t);
+  const geo=new THREE.TubeGeometry(curve,24,0.25,8,false);
+
+  let col=e.col, opacity=1.0, emi=0.18;
+  if(e.status==='dead')    {col=e.isAlt?e.col:0x333840; opacity=e.isAlt?0.0:0.3; emi=0.0;}
+  if(e.status==='failed')  {col=0xe8374a; emi=0.6;}
+  if(e.status==='rerouted'){col=0x3ebdb8; emi=0.45; opacity=1.0;}
+
+  const mat=new THREE.MeshPhongMaterial({
+    color:col, transparent:opacity<1.0, opacity,
+    emissive:new THREE.Color(col), emissiveIntensity:emi,
+  });
+  e.tube=new THREE.Mesh(geo,mat);
+  e.tube.receiveShadow=true;
+  scene.add(e.tube);
+}
+
+// Particles
+function spawnParticles(e) {
+  e.particles.forEach(p=>scene.remove(p.mesh)); e.particles=[];
+  if(e.status==='dead'||e.status==='failed') return;
+  for(let i=0;i<5;i++){
+    const col=e.status==='rerouted'?0x3ebdb8:e.col;
+    const m=new THREE.Mesh(
+      new THREE.SphereGeometry(0.12,6,6),
+      new THREE.MeshBasicMaterial({color:col})
+    );
+    scene.add(m);
+    e.particles.push({mesh:m, t:i/5, spd:0.003+Math.random()*0.002});
+  }
+}
+
+function updateParticles() {
+  edges.forEach(e=>{
+    if(!e.particles.length) return;
+    const f=new THREE.Vector3(...nodes[e.from].pos).setY(0.5);
+    const t=new THREE.Vector3(...nodes[e.to].pos).setY(0.5);
+    const mid=f.clone().lerp(t,0.5); mid.y=0.55;
+    const curve=new THREE.QuadraticBezierCurve3(f,mid,t);
+    e.particles.forEach(p=>{
+      p.t+=p.spd; if(p.t>1)p.t-=1;
+      p.mesh.position.copy(curve.getPoint(p.t));
+      p.mesh.material.color.setHex(e.status==='rerouted'?0x3ebdb8:e.col);
+    });
+  });
+}
+
+// Build full scene
+function buildScene() {
+  const ground=new THREE.Mesh(
+    new THREE.PlaneGeometry(100,100),
+    new THREE.MeshPhongMaterial({color:0x10151e})
+  ); ground.rotation.x=-Math.PI/2; ground.position.y=-0.01; ground.receiveShadow=true; scene.add(ground);
+  const grid=new THREE.GridHelper(100,50,0x1a2232,0x151c28); grid.position.y=0.001; scene.add(grid);
+
+  nodes.forEach(n=>{
+    let g;
+    if(n.type==='station') g=buildStation();
+    else if(n.type==='factory') g=buildFactory();
+    else g=buildHouse();
+    g.position.set(n.pos[0],0,n.pos[2]);
+    scene.add(g); n.mesh=g;
+    const d=makeDisc(0x4ab87a);
+    d.position.set(n.pos[0],0.01,n.pos[2]);
+    scene.add(d); n.disc=d;
+  });
+
+  edges.forEach(e=>{ buildTube(e); if(!e.isAlt) spawnParticles(e); });
+}
+
+// Color update
+const STATUS_HEX={normal:0x4ab87a,warning:0xf5c842,critical:0xe8374a,voltage:0x9b5de5,dead:0x555a60};
+const STATUS_CSS={normal:'#4ab87a',warning:'#f5c842',critical:'#e8374a',voltage:'#9b5de5',dead:'#555a60'};
+
+function updateNodeColors() {
+  nodes.forEach(n=>{
+    const hex=STATUS_HEX[n.status]||STATUS_HEX.normal;
+    const col=new THREE.Color(hex);
+    n.mesh.traverse(ch=>{
+      if(ch.isMesh&&ch.userData.isStatus&&ch.material){
+        ch.material.color.set(col); ch.material.emissive.set(col);
+      }
+    });
+    n.disc.material.color.set(col);
+  });
+}
+
+function updateEdgeColors() {
+  edges.forEach(e=>{
+    if(!e.tube) return;
+    let col=e.col, opacity=1.0, emi=0.18;
+    if(e.status==='dead')    {col=e.isAlt?e.col:0x333840; opacity=e.isAlt?0.0:0.3; emi=0.0;}
+    if(e.status==='failed')  {col=0xe8374a; emi=animT%1>0.5?0.9:0.3;}
+    if(e.status==='rerouted'){col=0x3ebdb8; emi=0.45;}
+    e.tube.material.color.setHex(col);
+    e.tube.material.emissive.setHex(col);
+    e.tube.material.emissiveIntensity=emi;
+    e.tube.material.opacity=opacity;
+    e.tube.material.transparent=opacity<1.0;
+  });
+}
+
+// Glow pulses
+let animT=0;
+function animateGlows(){
+  animT+=0.04;
+  nodes.forEach((n,i)=>{
+    const p=0.5+0.5*Math.sin(animT+i*1.3);
+    let op=0.12;
+    if(n.status==='warning')  op=0.2+0.2*p;
+    if(n.status==='critical') op=0.35+0.35*p;
+    if(n.status==='voltage')  op=0.25+0.2*p;
+    n.disc.material.opacity=op;
+    if(n.status==='critical'){const s=1+0.07*p; n.mesh.scale.set(s,s,s);}
+    else n.mesh.scale.set(1,1,1);
+  });
+}
+
+// DOM
+function buildNodeHealthDOM(){
+  const el=document.getElementById('node-health-list'); el.innerHTML='';
+  nodes.forEach(n=>{
+    const row=document.createElement('div'); row.className='node-row';
+    const icon=n.type==='station'?'PWR':n.type==='factory'?'FAC':'HSE';
+    row.innerHTML=`<div class="node-dot" id="ndot-${n.id}" style="background:#4ab87a"></div>
+      <div class="node-name">${icon} ${n.name}</div>
+      <div class="node-load" id="nload-${n.id}">${n.load.toFixed(0)}%</div>`;
+    el.appendChild(row);
+  });
+}
+
+function updateNodeHealthDOM(){
+  nodes.forEach(n=>{
+    const dot=document.getElementById(`ndot-${n.id}`);
+    const lel=document.getElementById(`nload-${n.id}`);
+    if(!dot||!lel) return;
+    const c=STATUS_CSS[n.status]||'#4ab87a';
+    dot.style.background=c; dot.style.boxShadow=`0 0 6px ${c}`;
+    lel.textContent=n.load.toFixed(0)+'%';
+    lel.style.color=n.load>80?'#f87171':n.load>65?'#fcd34d':'var(--text-dim)';
+  });
+}
+
+function updateMetrics(){
+  const al=nodes.reduce((a,n)=>a+n.load,0)/nodes.length;
+  const av=nodes.reduce((a,n)=>a+n.voltage,0)/nodes.length;
+  const dead=nodes.filter(n=>n.status==='dead'||n.status==='critical').length;
+  const stab=Math.max(0,100-dead*14-activeFailures.length*7);
+  const eff=Math.max(0,100-(al>80?(al-80)*2:0)-dead*9);
+  const sb=(id,bid,v,w,c)=>{
+    document.getElementById(id).textContent=v.toFixed(0)+'%';
+    const b=document.getElementById(bid); b.style.width=v+'%';
+    b.style.background=v>c?'#e8374a':v>w?'#f5c842':'#4ab87a';
+  };
+  sb('m-load','bar-load',al,70,85); sb('m-volt','bar-volt',av,75,60);
+  sb('m-stab','bar-stab',stab,70,50); sb('m-eff','bar-eff',eff,70,50);
+  const an=nodes.filter(n=>n.status!=='dead').length;
+  const ale=edges.filter(e=>!e.isAlt&&e.status!=='failed'&&e.status!=='dead').length
+           +edges.filter(e=>e.isAlt&&e.status==='rerouted').length;
+  document.getElementById('stat-nodes').textContent=`${an}/${nodes.length}`;
+  document.getElementById('stat-lines').textContent=`${ale}/${PRIMARY.length}`;
+  document.getElementById('stat-pred').textContent=predCount;
+  document.getElementById('stat-heals').textContent=healCount;
+  document.getElementById('stat-uptime').textContent=stab.toFixed(0)+'%';
+}
+
+// Log
+let healCount=0, predCount=0, activeFailures=[];
+function addLog(txt,type='info'){
+  const c=document.getElementById('log-entries');
+  const e=document.createElement('div'); e.className=`log-entry ${type}`;
+  const ts=new Date().toTimeString().split(' ')[0];
+  e.textContent=`[${ts}] ${txt}`;
+  c.insertBefore(e,c.firstChild);
+  setTimeout(()=>e.classList.add('visible'),20);
+  const all=c.querySelectorAll('.log-entry');
+  if(all.length>10) all[all.length-1].remove();
+}
+function showPrediction(txt,dur=4500){
+  const b=document.getElementById('prediction-banner');
+  document.getElementById('prediction-text').textContent=txt;
+  b.style.display='flex'; predCount++;
+  setTimeout(()=>b.style.display='none',dur);
+}
+function setStatusBadge(txt,col){
+  const b=document.getElementById('grid-status-badge');
+  b.textContent=txt; b.style.borderColor=col; b.style.color=col; b.style.background=col+'18';
+}
+function alertFlash(col){
+  const el=document.getElementById('alert-flash');
+  el.style.background=col; el.style.opacity='0.08';
+  setTimeout(()=>el.style.opacity='0',250);
+}
+
+// Failures
+function triggerOverload(){
+  const cands=nodes.filter(n=>n.status==='normal'||n.status==='warning');
+  if(!cands.length){addLog('All nodes already compromised.','crit');return;}
+  const n=cands[Math.floor(Math.random()*cands.length)];
+  n.status='warning'; n.load=75;
+  addLog(`Load anomaly on ${n.name}: ${n.load.toFixed(0)}% and rising.`,'warn');
+  setStatusBadge('WARNING','#f5c842');
+  setTimeout(()=>{
+    showPrediction(`PREDICTED OVERLOAD - ${n.name.toUpperCase()} - IN 5s`);
+    addLog(`AI: Load trend abnormal on ${n.name}. Failure imminent.`,'warn');
+  },700);
+  setTimeout(()=>{
+    n.status='critical'; n.load=97;
+    addLog(`CRITICAL: ${n.name} - Overload confirmed.`,'crit');
+    alertFlash('#e8374a'); setStatusBadge('CRITICAL','#e8374a');
+    activeFailures.push({type:'overload',nodeId:n.id});
+    setTimeout(()=>{
+      addLog(`AI: Redistributing load from ${n.name}...`,'heal');
+      edges.filter(e=>(e.from===n.id||e.to===n.id)&&e.status==='normal').forEach(e=>{
+        nodes[e.from===n.id?e.to:e.from].load=Math.min(nodes[e.from===n.id?e.to:e.from].load+7,74);
+      });
+      n.load=43; n.status='normal'; healCount++;
+      activeFailures=activeFailures.filter(f=>!(f.type==='overload'&&f.nodeId===n.id));
+      addLog(`HEALED: ${n.name} load redistributed. Grid stable.`,'heal');
+      alertFlash('#4ab87a');
+      if(!activeFailures.length) setStatusBadge('NOMINAL','#4ab87a');
+    },2800);
+  },5700);
+}
+
+function triggerLineFailure(){
+  const cands=edges.filter(e=>!e.isAlt&&e.status==='normal');
+  if(!cands.length){addLog('No active lines available.','crit');return;}
+  const e=cands[Math.floor(Math.random()*cands.length)];
+  addLog(`Fault detected: ${nodes[e.from].name} -> ${nodes[e.to].name}`,'warn');
+  setStatusBadge('WARNING','#f5c842');
+  e.status='failed';
+  e.particles.forEach(p=>scene.remove(p.mesh)); e.particles=[];
+  buildTube(e); alertFlash('#e8374a');
+  activeFailures.push({type:'line',idx:edges.indexOf(e)});
+  addLog(`AI: Scanning alternate routing paths...`,'heal');
+  setTimeout(()=>{
+    addLog(`CRITICAL: Line failure confirmed. Flow interrupted.`,'crit');
+    setStatusBadge('CRITICAL','#e8374a');
+    const alt=edges.find(a=>a.isAlt&&a.status==='dead'&&(a.from===e.from||a.to===e.from||a.from===e.to||a.to===e.to));
+    setTimeout(()=>{
+      if(alt){
+        alt.status='rerouted'; buildTube(alt); spawnParticles(alt); healCount++;
+        addLog(`AI: Alternate path activated: ${nodes[alt.from].name} -> ${nodes[alt.to].name}`,'heal');
+        addLog(`HEALED: Power rerouted. Grid restored.`,'heal');
+        alertFlash('#3ebdb8');
+        activeFailures=activeFailures.filter(f=>f.type!=='line');
+        if(!activeFailures.length) setStatusBadge('NOMINAL','#4ab87a');
+      } else {
+        addLog(`WARNING: No alternate path found. Segment isolated.`,'crit');
+      }
+    },1800);
+  },1400);
+}
+
+function triggerVoltageDrop(){
+  const outer=nodes.filter(n=>n.type==='house');
+  outer.forEach(n=>{if(n.status==='normal'){n.status='voltage';n.voltage=62;}});
+  addLog(`Voltage anomaly across residential nodes.`,'voltage');
+  setStatusBadge('VOLTAGE ALERT','#9b5de5');
+  showPrediction('VOLTAGE DROP - RESIDENTIAL NODES DEGRADING',5500);
+  activeFailures.push({type:'voltage'});
+  setTimeout(()=>{
+    addLog(`AI: Injecting reactive power compensation...`,'heal');
+    setTimeout(()=>{
+      outer.forEach(n=>{if(n.status==='voltage'){n.status='normal';n.voltage=91+Math.random()*8;}});
+      healCount++;
+      activeFailures=activeFailures.filter(f=>f.type!=='voltage');
+      addLog(`HEALED: Voltage restored across residential nodes.`,'heal');
+      alertFlash('#4ab87a');
+      if(!activeFailures.length) setStatusBadge('NOMINAL','#4ab87a');
+    },3200);
+  },4200);
+}
+
+function healGrid(){
+  nodes.forEach(n=>{n.status='normal';n.load=28+Math.random()*32;n.voltage=88+Math.random()*12;});
+  edges.forEach(e=>{
+    e.particles.forEach(p=>scene.remove(p.mesh)); e.particles=[];
+    e.status=e.isAlt?'dead':'normal'; buildTube(e);
+    if(!e.isAlt) spawnParticles(e);
+  });
+  activeFailures=[];
+  addLog(`MANUAL OVERRIDE: Full grid restored.`,'heal');
+  setStatusBadge('NOMINAL','#4ab87a'); alertFlash('#4ab87a');
+}
+
+function resetSim(){
+  nodes.forEach(n=>{n.status='normal';n.load=28+Math.random()*32;n.voltage=88+Math.random()*12;});
+  edges.forEach(e=>{
+    e.particles.forEach(p=>scene.remove(p.mesh)); e.particles=[];
+    e.status=e.isAlt?'dead':'normal'; buildTube(e);
+    if(!e.isAlt) spawnParticles(e);
+  });
+  activeFailures=[]; healCount=0; predCount=0;
+  document.getElementById('log-entries').innerHTML='';
+  setStatusBadge('NOMINAL','#4ab87a');
+  addLog('System reset. All nodes nominal.','info');
+}
+
+// Auto fluctuations
+function autoSim(){
+  nodes.forEach(n=>{
+    if(n.status==='normal'){
+      n.load+=n.loadDir*(0.2+Math.random()*0.2);
+      if(n.load>66)n.loadDir=-1; if(n.load<20)n.loadDir=1;
+    }
+  });
+}
+
+// Main loop
+let lastT=performance.now();
+function animate(){
+  requestAnimationFrame(animate);
+  const now=performance.now(); lastT=now;
+  autoSim(); animateGlows();
+  updateParticles(); updateNodeColors(); updateEdgeColors();
+  updateNodeHealthDOM(); updateMetrics();
+  applyCamera();
+  renderer.render(scene,camera);
+}
+
+window.addEventListener('resize',()=>{
+  renderer.setSize(window.innerWidth,window.innerHeight);
+  camera.aspect=window.innerWidth/window.innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+setInterval(()=>{document.getElementById('system-time').textContent=new Date().toTimeString().split(' ')[0];},1000);
+
+buildScene(); buildNodeHealthDOM();
+addLog('NeuroGrid initialized. Digital twin online.','info');
+addLog('9 nodes active - Power Hub, 2 factories, 6 houses.','info');
+addLog('AI monitoring layer active. All systems nominal.','info');
+animate();
+</script>
+</body>
+</html>
